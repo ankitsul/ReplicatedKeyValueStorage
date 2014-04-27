@@ -15,45 +15,6 @@ public class Message implements Serializable {
 	MessageType messageType;
 	String senderPort;
 	
-	String predecessor;
-	String successor;
-	
-	String insertCount;
-	
-	public String getInsertCount() {
-		return insertCount;
-	}
-
-	public void setInsertCount(String insertCount) {
-		this.insertCount = insertCount;
-	}
-
-	public String getPredecessor() {
-		return predecessor;
-	}
-
-	public void setPredecessor(String predecessor) {
-		this.predecessor = predecessor;
-	}
-
-	public String getSuccessor() {
-		return successor;
-	}
-
-	public void setSuccessor(String successor) {
-		this.successor = successor;
-	}
-
-	String responsePort;
-
-	public String getResponsePort() {
-		return responsePort;
-	}
-
-	public void setResponsePort(String responsePort) {
-		this.responsePort = responsePort;
-	}
-
 	/* For insert operation */
 	String key;
 	String value;
