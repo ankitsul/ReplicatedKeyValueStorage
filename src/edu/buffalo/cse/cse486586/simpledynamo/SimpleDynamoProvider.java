@@ -56,6 +56,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 	private MatrixCursor allResultCursor;
 	private MatrixCursor partialResultCursor;
 
+	// private Lock opeartionLock;
+
 	@Override
 	public int delete(Uri uri, String selection, String[] selectionArgs) {
 		if (selection.equals("*")) {
@@ -90,12 +92,16 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 	@Override
 	public Uri insert(Uri uri, ContentValues values) {
-		insertFlag = true;
-		Log.v("insert", values.toString());
+		// opeartionLock.lock();
+		synchronized (this) {
+			insertFlag = true;
+			Log.v("insert", values.toString());
 
-		// Sending Insert request to the right node
-		serveRequest(values, null);
-		insertFlag = false;
+			// Sending Insert request to the right node
+			serveRequest(values, null);
+			insertFlag = false;
+		}
+		// opeartionLock.unlock();
 		return null;
 	}
 
@@ -142,10 +148,12 @@ public class SimpleDynamoProvider extends ContentProvider {
 						insertValues(values, destinationPorts);
 						break;
 					} else if (queryFlag) {
+						// synchronized (this) {
 						sendRequest(portStr,
 								MessageType.QUERY_REQUEST.toString(),
 								selection, "", activePorts.get(i)
 										.getPortNumber());
+						// }
 					} else if (deleteFlag) {
 						List<String> destinationPorts = Arrays.asList(
 								activePorts.get(i).getPortNumber(), activePorts
@@ -166,9 +174,11 @@ public class SimpleDynamoProvider extends ContentProvider {
 						insertValues(values, destinationPorts);
 						break;
 					} else if (queryFlag) {
+						// synchronized (this) {
 						sendRequest(portStr,
 								MessageType.QUERY_REQUEST.toString(),
 								selection, "", portStr);
+						// }
 					} else if (deleteFlag) {
 						getContext().deleteFile(selection);
 						List<String> destinationPorts = Arrays.asList(
@@ -192,10 +202,12 @@ public class SimpleDynamoProvider extends ContentProvider {
 						insertValues(values, destinationPorts);
 						break;
 					} else if (queryFlag) {
+						// synchronized (this) {
 						sendRequest(portStr,
 								MessageType.QUERY_REQUEST.toString(),
 								selection, "", activePorts.get(i)
 										.getPortNumber());
+						// }
 					} else if (deleteFlag) {
 						List<String> destinationPorts = Arrays.asList(
 								activePorts.get(i).getPortNumber(), activePorts
@@ -242,6 +254,11 @@ public class SimpleDynamoProvider extends ContentProvider {
 	public boolean onCreate() {
 		queryResponseReceived = false;
 		allResponseReceived = false;
+
+		responseCursor = null;
+
+		// opeartionLock = new ReentrantLock(true);
+
 		TelephonyManager tel = (TelephonyManager) this.getContext()
 				.getSystemService(Context.TELEPHONY_SERVICE);
 		portStr = tel.getLine1Number().substring(
@@ -303,13 +320,19 @@ public class SimpleDynamoProvider extends ContentProvider {
 						Object[] row = new Object[cursor.getColumnCount()];
 
 						StringBuffer value = getValue(message.getSelection());
-						row[cursor.getColumnIndex("key")] = message
-								.getSelection();
-						row[cursor.getColumnIndex("value")] = value;
-						cursor.addRow(row);
-						cursor.close();
-						cursorClient(cursor, message.getSenderPort(),
-								MessageType.QUERY_RESPONSE.toString());
+						if (value != null) {
+							row[cursor.getColumnIndex("key")] = message
+									.getSelection();
+							row[cursor.getColumnIndex("value")] = value;
+							cursor.addRow(row);
+							cursor.close();
+							cursorClient(cursor, message.getSenderPort(),
+									MessageType.QUERY_RESPONSE.toString());
+						} else {
+							cursorClient(null, message.getSenderPort(),
+									MessageType.QUERY_RESPONSE.toString());
+						}
+
 					} else if (message.getMessageType().equals(
 							MessageType.DELETE_REQUEST)) {
 						getContext().deleteFile(message.getSelection());
@@ -336,6 +359,9 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 		/** Method to convert Map into a Cursor object */
 		private MatrixCursor convertMapToCursor(Map<String, String> cursorMap) {
+			if (cursorMap == null) {
+				return null;
+			}
 			String[] columns = { "key", "value" };
 			MatrixCursor cursor = new MatrixCursor(columns);
 			for (Map.Entry<String, String> entry : cursorMap.entrySet()) {
@@ -390,6 +416,18 @@ public class SimpleDynamoProvider extends ContentProvider {
 	@Override
 	public Cursor query(Uri uri, String[] projection, String selection,
 			String[] selectionArgs, String sortOrder) {
+		// opeartionLock.lock();
+
+		/*
+		 * while (insertFlag) {
+		 * 
+		 * }
+		 */
+
+		/*
+		 * try { Thread.sleep(100); } catch (InterruptedException e) { // TODO
+		 * Auto-generated catch block e.printStackTrace(); }
+		 */
 		Log.v(TAG, "query:" + selection);
 		String[] columns = { "key", "value" };
 		StringBuffer value = new StringBuffer();
@@ -423,17 +461,30 @@ public class SimpleDynamoProvider extends ContentProvider {
 				cursor.close();
 				return cursor;
 			} else if (!isFileAvailable(selection)) {
-				queryFlag = true;
-				serveRequest(null, selection);
-				while (!queryResponseReceived) {
-					// Wait until the response is received
+				synchronized (this) {
+					queryFlag = true;
+					while (responseCursor == null) {
+						try {
+							Thread.sleep(50);
+						} catch (InterruptedException e) {
+							// TODO Auto-generated catch block
+							e.printStackTrace();
+						}
+						serveRequest(null, selection);
+						while (!queryResponseReceived) {
+							// Wait until the response is received
+						}
+						queryResponseReceived = false;
+					}
+					// resetting it to false
+					queryFlag = false;
+					Cursor returnCursor = responseCursor;
+					responseCursor = null;
+					return returnCursor;
 				}
-				// resetting it to false
-				queryResponseReceived = false;
-				queryFlag = false;
-				return responseCursor;
 			}
 		}
+		// opeartionLock.unlock();
 		return null;
 	}
 
@@ -504,6 +555,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 			fileInputStream.close();
 		} catch (FileNotFoundException e) {
 			Log.e(TAG, "File not found exception:" + e.getMessage());
+			return null;
 		} catch (IOException e) {
 			Log.e(TAG, "IO Exception while creating socket:" + e.getMessage());
 		}
@@ -558,9 +610,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 		Message message = new Message();
 		Map<String, String> cursorMap = null;
-		if (null != cursor) {
-			cursorMap = convertCursorToMap(cursor);
-		}
+		cursorMap = convertCursorToMap(cursor);
 		message.setCursorMap(cursorMap);
 		message.setSenderPort(portStr);
 		message.setMessageType(MessageType.valueOf(messageType));
@@ -580,6 +630,9 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 	/** Method to convert Cursor to a Map */
 	private Map<String, String> convertCursorToMap(Cursor cursor) {
+		if (cursor == null) {
+			return null;
+		}
 		Map<String, String> cursorMap = new HashMap<String, String>();
 		while (cursor.moveToNext()) {
 			cursorMap.put(cursor.getString(cursor.getColumnIndex("key")),
