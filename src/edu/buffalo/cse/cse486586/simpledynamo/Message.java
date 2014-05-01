@@ -14,15 +14,54 @@ public class Message implements Serializable {
 
 	MessageType messageType;
 	String senderPort;
-	
+
 	/* For insert operation */
 	String key;
 	String value;
 
 	/* For query request */
 	String selection;
-	
+
+	String senderPredecessor;
+	String senderSucessor;
+
+	String count;
+
+	String responsePort;
+
+	public String getResponsePort() {
+		return responsePort;
+	}
+
+	public void setResponsePort(String responsePort) {
+		this.responsePort = responsePort;
+	}
+
+	public String getCount() {
+		return count;
+	}
+
+	public void setCount(String count) {
+		this.count = count;
+	}
+
 	boolean firstRequest;
+
+	public String getSenderPredecessor() {
+		return senderPredecessor;
+	}
+
+	public void setSenderPredecessor(String senderPredecessor) {
+		this.senderPredecessor = senderPredecessor;
+	}
+
+	public String getSenderSucessor() {
+		return senderSucessor;
+	}
+
+	public void setSenderSucessor(String senderSucessor) {
+		this.senderSucessor = senderSucessor;
+	}
 
 	/* Required for cursor response */
 	Map<String, String> cursorMap;
@@ -34,7 +73,7 @@ public class Message implements Serializable {
 	public void setFirstRequest(boolean firstRequest) {
 		this.firstRequest = firstRequest;
 	}
-	
+
 	public Map<String, String> getCursorMap() {
 		return cursorMap;
 	}
