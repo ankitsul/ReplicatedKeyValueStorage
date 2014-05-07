@@ -30,6 +30,13 @@ import android.os.AsyncTask;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 
+/**
+ * SimpleDynamoProvider contains all the implementation code
+ * 
+ * @author ankitsul
+ * 
+ */
+
 public class SimpleDynamoProvider extends ContentProvider {
 	static final String TAG = SimpleDynamoProvider.class.getSimpleName();
 	static final int SERVER_PORT = 10000;
@@ -105,8 +112,9 @@ public class SimpleDynamoProvider extends ContentProvider {
 			try {
 				Thread.sleep(150);
 			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
+				Log.e(TAG,
+						"Interrupted exception while thread sleep:"
+								+ e.getMessage());
 			}
 			if (!pingResponse) {
 				insertValues(values.getAsString(KEY_FIELD),
@@ -154,7 +162,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 			// To handle the wrapped DHT
 			if (portStr.equals(activePorts.get(0).getPortNumber())) {
 				if (comparisonPredecessor < 0 && comparisonNode <= 0) {
-					Log.d(TAG, "Step 3");
 					if (insertFlag) {
 						destPort = activePorts.get(i).getPortNumber();
 						new ClientAsyncTask().executeOnExecutor(
@@ -172,7 +179,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 										.getPortNumber());
 						break;
 					} else if (deleteFlag) {
-						Log.d(TAG, "Inside delete 1");
 						new ClientAsyncTask().executeOnExecutor(
 								AsyncTask.THREAD_POOL_EXECUTOR, portStr,
 								MessageType.DELETE_REQUEST.toString(),
@@ -183,7 +189,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 				} else if (i == 0
 						&& (comparisonPredecessor < 0 || comparisonNode <= 0)) {
-					Log.d(TAG, "Step 4");
 					if (insertFlag) {
 						pingResponse = true;
 						insertLocally(filename, value);
@@ -213,8 +218,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 			} else {
 				if ((comparisonPredecessor < 0 && comparisonNode <= 0)
 						|| (i == 0 && (comparisonPredecessor < 0 || comparisonNode <= 0))) {
-
-					Log.d(TAG, "Step 6");
 					if (insertFlag) {
 						destPort = activePorts.get(i).getPortNumber();
 						new ClientAsyncTask().executeOnExecutor(
@@ -344,7 +347,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 				Log.e(TAG,
 						"IO Exception while reading the message from the stream:"
 								+ e.getMessage());
-				e.printStackTrace();
 			} catch (ClassNotFoundException e) {
 				Log.e(TAG,
 						"Class loader is unable to load the class:"
@@ -363,7 +365,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 				message = (Message) objectInputStream.readObject();
 				objectInputStream.close();
 				socket.close();
-				// synchronized (this) {
 				if (null != message) {
 					Log.d(TAG, "Message Type:" + message.getMessageType() + ":"
 							+ message.getSenderPort());
@@ -475,10 +476,13 @@ public class SimpleDynamoProvider extends ContentProvider {
 						}
 					}
 				}
-				// }
 			}
 		}
 
+		/**
+		 * Method to get create the correct packet which needs to be replied
+		 * back
+		 */
 		private MatrixCursor getSyncData(String node, String predecessor,
 				String sucessor) {
 			MatrixCursor localCursor = getLocalCursor();
@@ -507,6 +511,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 			}
 		}
 
+		/** Method to check if "key" belongs to a partition owned by "node" */
 		private boolean isInThisPartition(String key, String node,
 				String predecessor, String successor) {
 			try {
@@ -526,6 +531,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 		}
 	}
 
+	/** Method to arrange the order of the nodes */
 	private void arrangeNodes() {
 		try {
 			PortHashObject portHashObject = new PortHashObject("5554",
@@ -610,16 +616,13 @@ public class SimpleDynamoProvider extends ContentProvider {
 		} else {
 			synchronized (this) {
 				if (isFileAvailable(selection)) {
-					Log.d(TAG, "Stepp 1");
 					value = getValue(selection);
-					Log.d(TAG, "Stepp 6" + value);
 					row[cursor.getColumnIndex(KEY_FIELD)] = selection;
 					row[cursor.getColumnIndex(VALUE_FIELD)] = value;
 					cursor.addRow(row);
 					cursor.close();
 					return cursor;
 				} else if (!isFileAvailable(selection)) {
-					Log.d(TAG, "Stepp 2");
 					queryFlag = true;
 					while (responseCursor == null) {
 						try {
@@ -633,13 +636,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 						while (!queryResponseReceived) {
 							// Wait until the response is received
 						}
-						Log.d(TAG, "@@@Out of loop, Response Cursor:"
-								+ responseCursor);
 						queryResponseReceived = false;
 					}
-					Log.d(TAG, "@@@Out of bigger loop, Response Cursor:"
-							+ responseCursor);
-					;
 					// resetting it to false
 					queryFlag = false;
 					Cursor returnCursor = responseCursor;
@@ -875,7 +873,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 			message.setMessageType(MessageType.valueOf(msgs[1]));
 			try {
 				Log.d(TAG,
-						"@@@@SYNC request sent Request type:"
+						"SYNC request sent Request type:"
 								+ message.getMessageType() + "Sending to:"
 								+ msgs[0]);
 				socket = new Socket(InetAddress.getByAddress(new byte[] { 10,
