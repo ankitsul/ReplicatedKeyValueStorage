@@ -10,7 +10,6 @@ import java.io.ObjectOutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -42,6 +41,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 	private String portStr;
 	private String myPort;
 
+	private String destPort;
+
 	private String predecessor1;
 	private String successor1;
 	private String predecessor2;
@@ -52,6 +53,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 	boolean insertFlag;
 	boolean queryFlag;
 	boolean deleteFlag;
+
+	boolean pingResponse;
 	boolean queryResponseReceived;
 	boolean allResponseReceived;
 
@@ -99,11 +102,24 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 			// Sending Insert request to the right node
 			serveRequest(values, null);
+			try {
+				Thread.sleep(150);
+			} catch (InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			if (!pingResponse) {
+				insertValues(values.getAsString(KEY_FIELD),
+						values.getAsString(VALUE_FIELD),
+						getSucessors(destPort), "0");
+			}
+			pingResponse = false;
 			insertFlag = false;
 		}
 		return null;
 	}
 
+	/** Method to redirect the requests to the correct node */
 	private void serveRequest(ContentValues values, String selection) {
 		String filename = null;
 		String value = null;
@@ -140,6 +156,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 				if (comparisonPredecessor < 0 && comparisonNode <= 0) {
 					Log.d(TAG, "Step 3");
 					if (insertFlag) {
+						destPort = activePorts.get(i).getPortNumber();
 						new ClientAsyncTask().executeOnExecutor(
 								AsyncTask.THREAD_POOL_EXECUTOR, portStr,
 								MessageType.INSERT.toString(), values
@@ -168,6 +185,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 						&& (comparisonPredecessor < 0 || comparisonNode <= 0)) {
 					Log.d(TAG, "Step 4");
 					if (insertFlag) {
+						pingResponse = true;
 						insertLocally(filename, value);
 						List<String> destinationPorts = Arrays.asList(
 								activePorts.get((i + 1) % 5).getPortNumber(),
@@ -198,6 +216,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 					Log.d(TAG, "Step 6");
 					if (insertFlag) {
+						destPort = activePorts.get(i).getPortNumber();
 						new ClientAsyncTask().executeOnExecutor(
 								AsyncTask.THREAD_POOL_EXECUTOR, portStr,
 								MessageType.INSERT.toString(), values
@@ -225,6 +244,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 		}
 	}
 
+	/** Method to send insert request to multiple destination */
 	private void insertValues(String key, String value,
 			List<String> destinationPorts, String count) {
 		for (int i = 0; i < destinationPorts.size(); i++) {
@@ -235,6 +255,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 		}
 	}
 
+	/** Method to send delete request to multiple destination */
 	private void deleteValues(String selection, List<String> destinationPorts,
 			String count) {
 		for (int i = 0; i < destinationPorts.size(); i++) {
@@ -245,17 +266,17 @@ public class SimpleDynamoProvider extends ContentProvider {
 		}
 	}
 
+	/** Method to insert values locally */
 	private void insertLocally(String filename, String value) {
-		Log.d(TAG, "@@@Value inserted locally:" + filename + ":" + value);
+		Log.d(TAG, "Value inserted locally:" + filename + ":" + value);
 		try {
 			FileOutputStream fileOutputStream = getContext().openFileOutput(
 					filename, Context.MODE_PRIVATE);
 			fileOutputStream.write(value.getBytes());
 			fileOutputStream.close();
 		} catch (IOException e) {
-			// Log.e(TAG,
-			// "IO Exception while writing to the file:" + e.getMessage());
-			e.printStackTrace();
+			Log.e(TAG,
+					"IO Exception while writing to the file:" + e.getMessage());
 		}
 	}
 
@@ -263,6 +284,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 	public boolean onCreate() {
 		queryResponseReceived = false;
 		allResponseReceived = false;
+		pingResponse = false;
 
 		responseCursor = null;
 
@@ -276,88 +298,77 @@ public class SimpleDynamoProvider extends ContentProvider {
 		activePorts = new ArrayList<PortHashObject>();
 		arrangeNodes();
 
-		Log.d(TAG, "Predecessor 1:" + predecessor1);
-		Log.d(TAG, "Predecessor 2:" + predecessor2);
-		Log.d(TAG, "Sucessor 1:" + successor1);
-		Log.d(TAG, "Sucessor 2:" + successor2);
-
 		try {
 			ServerSocket serverSocket = new ServerSocket(SERVER_PORT);
 			new ServerTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR,
 					serverSocket);
 		} catch (IOException e) {
-			// Log.e(TAG,
-			// "IO Exception while creating server socket:"
-			// + e.getMessage());
-			e.printStackTrace();
+			Log.e(TAG,
+					"IO Exception while creating server socket:"
+							+ e.getMessage());
 		}
 
 		syncData();
 		return false;
 	}
 
+	/** Method to synchronize data with other nodes */
 	private void syncData() {
 		// Get data from predecessors which lies in their partition i.e.
 		// non-replicated values, as in when they act as coordinators
 		new DataSyncTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR,
-				predecessor1, predecessor2,
-				MessageType.SYNC_REQUEST_PREDECESSORS.toString(), null, null);
+				predecessor1, MessageType.SYNC_REQUEST_PREDECESSORS.toString(),
+				null, null);
+		new DataSyncTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR,
+				predecessor2, MessageType.SYNC_REQUEST_PREDECESSORS.toString(),
+				null, null);
 		// Get data from successors which is supposed to be in this node (the
 		// value might be replicated in the successors).
 		new DataSyncTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR,
-				successor1, successor2,
-				MessageType.SYNC_REQUEST_SUCESSORS.toString(), predecessor1,
-				successor1);
+				successor1, MessageType.SYNC_REQUEST_SUCESSORS.toString(),
+				predecessor1, successor1);
+		new DataSyncTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR,
+				successor2, MessageType.SYNC_REQUEST_SUCESSORS.toString(),
+				predecessor1, successor1);
 	}
 
+	/** Server Async task to listen to request */
 	private class ServerTask extends AsyncTask<ServerSocket, String, Void> {
 
 		@Override
 		protected Void doInBackground(ServerSocket... sockets) {
 			ServerSocket serverSocket = sockets[0];
-			// try {
-			readMessage(serverSocket);
-			// } catch (SocketTimeoutException e) {
-			// e.printStackTrace();
-			/*
-			 * } catch (IOException e) { // Log.e(TAG, //
-			 * "IO Exception while reading the message from the stream:" // +
-			 * e.getMessage()); e.printStackTrace(); } catch
-			 * (ClassNotFoundException e) { // Log.e(TAG, //
-			 * "Class loader is unable to load the class:" // + e.getMessage());
-			 * e.printStackTrace(); }
-			 */
+			try {
+				readMessage(serverSocket);
+			} catch (IOException e) {
+				Log.e(TAG,
+						"IO Exception while reading the message from the stream:"
+								+ e.getMessage());
+				e.printStackTrace();
+			} catch (ClassNotFoundException e) {
+				Log.e(TAG,
+						"Class loader is unable to load the class:"
+								+ e.getMessage());
+			}
 			return null;
 		}
 
-		private void readMessage(ServerSocket serverSocket) {
+		private void readMessage(ServerSocket serverSocket) throws IOException,
+				ClassNotFoundException {
 			Message message = null;
-			// try {
-
 			while (true) {
-				try {
-					Socket socket = serverSocket.accept();
-					// socket.setSoTimeout(1000);
-					ObjectInputStream objectInputStream = new ObjectInputStream(
-							socket.getInputStream());
-					message = (Message) objectInputStream.readObject();
-					objectInputStream.close();
-					socket.close();
-				} catch (SocketTimeoutException e) {
-					e.printStackTrace();
-				} catch (IOException e) {
-					e.printStackTrace();
-				} catch (ClassNotFoundException e) {
-					e.printStackTrace();
-				}
-				// serverSocket.setSoTimeout(10000);
+				Socket socket = serverSocket.accept();
+				ObjectInputStream objectInputStream = new ObjectInputStream(
+						socket.getInputStream());
+				message = (Message) objectInputStream.readObject();
+				objectInputStream.close();
+				socket.close();
+				// synchronized (this) {
 				if (null != message) {
-					Log.d(TAG, "@@@@Message Type:" + message.getMessageType()
-							+ ":" + message.getSenderPort());
+					Log.d(TAG, "Message Type:" + message.getMessageType() + ":"
+							+ message.getSenderPort());
 					if (message.getMessageType().equals(MessageType.INSERT)) {
 						insertLocally(message.getKey(), message.getValue());
-						cursorClient(null, message.getSenderPort(),
-								MessageType.PING_RESPONSE.toString());
 						if (message.getCount().equals("2")) {
 							new ClientAsyncTask().executeOnExecutor(
 									AsyncTask.THREAD_POOL_EXECUTOR, portStr,
@@ -369,7 +380,10 @@ public class SimpleDynamoProvider extends ContentProvider {
 									MessageType.INSERT.toString(),
 									message.getKey(), message.getValue(),
 									successor2, "0");
+							cursorClient(null, message.getSenderPort(),
+									MessageType.PING_RESPONSE.toString());
 						}
+
 					} else if (message.getMessageType().equals(
 							MessageType.QUERY_REQUEST)) {
 						String[] columns = { KEY_FIELD, VALUE_FIELD };
@@ -383,27 +397,17 @@ public class SimpleDynamoProvider extends ContentProvider {
 							row[cursor.getColumnIndex(VALUE_FIELD)] = value;
 							cursor.addRow(row);
 							cursor.close();
-							// resultCursor = cursor;
-							// new
-							// CursorClientTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR,
-							// message.getSenderPort(),
-							// MessageType.QUERY_RESPONSE.toString());
 							cursorClient(cursor, message.getSenderPort(),
 									MessageType.QUERY_RESPONSE.toString());
 						} else {
-							// resultCursor = null;
-							// new
-							// CursorClientTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR,
-							// message.getSenderPort(),
-							// MessageType.QUERY_RESPONSE.toString());
 							cursorClient(null, message.getSenderPort(),
 									MessageType.QUERY_RESPONSE.toString());
 						}
 
 					} else if (message.getMessageType().equals(
 							MessageType.DELETE_REQUEST)) {
-						Log.d(TAG, "@@@Delete for" + message.getSelection());
-						if(isFileAvailable(message.getSelection())){
+						Log.d(TAG, "Delete for" + message.getSelection());
+						if (isFileAvailable(message.getSelection())) {
 							getContext().deleteFile(message.getSelection());
 						}
 						if (message.getCount().equals("2")) {
@@ -432,6 +436,9 @@ public class SimpleDynamoProvider extends ContentProvider {
 						responseCursor = convertMapToCursor(message
 								.getCursorMap());
 						queryResponseReceived = true;
+					} else if (message.getMessageType().equals(
+							MessageType.PING_RESPONSE)) {
+						pingResponse = true;
 					} else if (message.getMessageType().equals(
 							MessageType.QUERY_RESPONSE_ALL)) {
 						partialResultCursor = convertMapToCursor(message
@@ -468,15 +475,13 @@ public class SimpleDynamoProvider extends ContentProvider {
 						}
 					}
 				}
+				// }
 			}
 		}
 
 		private MatrixCursor getSyncData(String node, String predecessor,
 				String sucessor) {
-			Log.d(TAG, "@@@@PREDECESSOR:" + predecessor + "SUCCESSOR:"
-					+ sucessor);
 			MatrixCursor localCursor = getLocalCursor();
-
 			if (localCursor != null) {
 				String[] columns = { KEY_FIELD, VALUE_FIELD };
 				MatrixCursor syncCursor = new MatrixCursor(columns);
@@ -486,13 +491,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 							.getColumnIndex(KEY_FIELD)), node, predecessor,
 							sucessor)) {
 						// Add to the response packet
-						Log.d(TAG,
-								"@@@@Adding to packet:"
-										+ localCursor.getString(localCursor
-												.getColumnIndex(KEY_FIELD))
-										+ ":"
-										+ localCursor.getString(localCursor
-												.getColumnIndex(VALUE_FIELD)));
 						row[syncCursor.getColumnIndex(KEY_FIELD)] = localCursor
 								.getString(localCursor
 										.getColumnIndex(KEY_FIELD));
@@ -520,8 +518,9 @@ public class SimpleDynamoProvider extends ContentProvider {
 					return true;
 				}
 			} catch (NoSuchAlgorithmException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
+				Log.e(TAG,
+						"No such algorithm exception while creating SHA1 hash:"
+								+ e.getMessage());
 			}
 			return false;
 		}
@@ -577,8 +576,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 				}
 			}
 		} catch (NoSuchAlgorithmException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			Log.e(TAG, "No such algorithm exception while creating SHA1 hash:"
+					+ e.getMessage());
 		}
 	}
 
@@ -598,11 +597,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 							AsyncTask.THREAD_POOL_EXECUTOR, portStr,
 							MessageType.QUERY_REQUEST_ALL.toString(), "", "",
 							activePorts.get(i).getPortNumber());
-					// sendRequest(portStr,
-					// MessageType.QUERY_REQUEST_ALL.toString(), "", "",
-					// activePorts.get(i).getPortNumber());
 					while (!allResponseReceived) {
-
 					}
 					allResponseReceived = false;
 					allResultCursor = concat(allResultCursor,
@@ -615,36 +610,36 @@ public class SimpleDynamoProvider extends ContentProvider {
 		} else {
 			synchronized (this) {
 				if (isFileAvailable(selection)) {
+					Log.d(TAG, "Stepp 1");
 					value = getValue(selection);
-					while (value == null) {
-						try {
-							Thread.sleep(50);
-						} catch (InterruptedException e) {
-							// TODO Auto-generated catch block
-							e.printStackTrace();
-						}
-						value = getValue(selection);
-					}
+					Log.d(TAG, "Stepp 6" + value);
 					row[cursor.getColumnIndex(KEY_FIELD)] = selection;
 					row[cursor.getColumnIndex(VALUE_FIELD)] = value;
 					cursor.addRow(row);
 					cursor.close();
 					return cursor;
 				} else if (!isFileAvailable(selection)) {
+					Log.d(TAG, "Stepp 2");
 					queryFlag = true;
 					while (responseCursor == null) {
 						try {
 							Thread.sleep(50);
 						} catch (InterruptedException e) {
-							// TODO Auto-generated catch block
-							e.printStackTrace();
+							Log.e(TAG,
+									"Interrupted exception while thread sleep:"
+											+ e.getMessage());
 						}
 						serveRequest(null, selection);
 						while (!queryResponseReceived) {
 							// Wait until the response is received
 						}
+						Log.d(TAG, "@@@Out of loop, Response Cursor:"
+								+ responseCursor);
 						queryResponseReceived = false;
 					}
+					Log.d(TAG, "@@@Out of bigger loop, Response Cursor:"
+							+ responseCursor);
+					;
 					// resetting it to false
 					queryFlag = false;
 					Cursor returnCursor = responseCursor;
@@ -656,12 +651,12 @@ public class SimpleDynamoProvider extends ContentProvider {
 		return null;
 	}
 
+	/** Method to concatenate the result cursor with the partial result */
 	private MatrixCursor concat(MatrixCursor allResultCursor,
 			MatrixCursor partialResultCursor) {
 		if (null == partialResultCursor) {
 			return allResultCursor;
 		}
-
 		Map<String, String> allResultMap = convertCursorToMap(allResultCursor);
 		Map<String, String> partialResultMap = convertCursorToMap(partialResultCursor);
 
@@ -715,19 +710,17 @@ public class SimpleDynamoProvider extends ContentProvider {
 		FileInputStream fileInputStream;
 		try {
 			fileInputStream = getContext().openFileInput(selection);
-
 			while ((ch = fileInputStream.read()) != -1) {
 				value.append((char) ch);
 			}
 			fileInputStream.close();
 		} catch (FileNotFoundException e) {
-			// Log.e(TAG, "File not found exception:" + e.getMessage());
-			e.printStackTrace();
+			Log.e(TAG, "File not found exception:" + e.getMessage());
 			return null;
 		} catch (IOException e) {
-			// Log.e(TAG, "IO Exception while retrieving data from file:" +
-			// e.getMessage());
-			e.printStackTrace();
+			Log.e(TAG,
+					"IO Exception while retrieving data from file:"
+							+ e.getMessage());
 		}
 		return value;
 	}
@@ -739,6 +732,7 @@ public class SimpleDynamoProvider extends ContentProvider {
 		return 0;
 	}
 
+	/** Client Async task to send request to other nodes */
 	private class ClientAsyncTask extends AsyncTask<String, Void, Void> {
 
 		@Override
@@ -758,8 +752,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 				message.setValue(msgs[3]);
 				message.setCount(msgs[5]);
 				Log.d(TAG,
-						"@@@Insert request sending to the " + destination
-								+ "Key:" + message.getKey() + "Value:"
+						"Insert request sending to the " + destination + "Key:"
+								+ message.getKey() + "Value:"
 								+ message.getValue());
 			} else if (message.getMessageType().equals(
 					MessageType.QUERY_REQUEST)) {
@@ -769,12 +763,12 @@ public class SimpleDynamoProvider extends ContentProvider {
 				message.setSelection(msgs[2]);
 				message.setCount(msgs[5]);
 			}
-			
-			Log.d(TAG, "@@@@Sent Request type:" + message.getMessageType()
-					+ "Key:" + message.getKey() + "Value:" + message.getValue()
+
+			Log.d(TAG, "Sent Request type:" + message.getMessageType() + "Key:"
+					+ message.getKey() + "Value:" + message.getValue()
 					+ "Selection:" + message.getSelection() + "Sending to:"
 					+ destination + " Count:" + message.getCount());
-			
+
 			try {
 				socket = new Socket(InetAddress.getByAddress(new byte[] { 10,
 						0, 2, 2 }), Integer.parseInt(destination) * 2);
@@ -784,63 +778,62 @@ public class SimpleDynamoProvider extends ContentProvider {
 				objectOutputStream.close();
 				socket.close();
 			} catch (IOException e) {
-				// Log.e(TAG, "IO Exception while creating socket:" +
-				// e.getMessage());
-				e.printStackTrace();
+				Log.e(TAG,
+						"IO Exception while creating socket:" + e.getMessage());
 				List<String> sucessors = getSucessors(destination);
 				if (message.getMessageType().equals(MessageType.INSERT)
 						&& (message.getCount().equals("2"))) {
-					Log.d(TAG, "####Insert exception");
+					Log.e(TAG, "Insert exception");
 					insertValues(message.getKey(), message.getValue(),
 							sucessors, "0");
 				} else if (message.getMessageType().equals(
 						MessageType.QUERY_REQUEST)) {
-					Log.d(TAG, "####Query exception");
+					Log.e(TAG, "Query exception");
 					new ClientAsyncTask().executeOnExecutor(
 							AsyncTask.THREAD_POOL_EXECUTOR, portStr,
 							MessageType.QUERY_REQUEST.toString(),
 							message.getSelection(), "", sucessors.get(0));
 				} else if (message.getMessageType().equals(
-						MessageType.DELETE_REQUEST)
-						/*&& (message.getCount().equals("2"))*/) {
-					Log.d(TAG, "####Delete exception");
+						MessageType.DELETE_REQUEST)) {
+					Log.e(TAG, "Delete exception");
 					deleteValues(message.getSelection(), sucessors, "0");
 				} else if ((message.getMessageType()
 						.equals(MessageType.QUERY_REQUEST_ALL))
 						|| (message.getMessageType()
 								.equals(MessageType.DELETE_REQUEST_ALL))) {
-					Log.d(TAG, "####Query All exception");
+					Log.e(TAG, "Query All exception");
 					allResponseReceived = true;
 				}
 			}
 			return null;
 		}
-
-		private List<String> getSucessors(String destination) {
-			List<String> sucessors = new ArrayList<String>();
-			for (int i = 0; i < activePorts.size(); i++) {
-				if ((destination.equals(activePorts.get(i).getPortNumber()))
-						&& (i == (activePorts.size() - 1))) {
-					sucessors.add(activePorts.get(0).getPortNumber());
-					sucessors.add(activePorts.get(1).getPortNumber());
-					break;
-				} else if ((destination.equals(activePorts.get(i)
-						.getPortNumber())) && (i == (activePorts.size() - 2))) {
-					sucessors.add(activePorts.get(activePorts.size() - 1)
-							.getPortNumber());
-					sucessors.add(activePorts.get(0).getPortNumber());
-					break;
-				} else if (destination.equals(activePorts.get(i)
-						.getPortNumber())) {
-					sucessors.add(activePorts.get(i + 1).getPortNumber());
-					sucessors.add(activePorts.get(i + 2).getPortNumber());
-					break;
-				}
-			}
-			return sucessors;
-		}
 	}
 
+	/** Method to get successors of a node */
+	private List<String> getSucessors(String destination) {
+		List<String> sucessors = new ArrayList<String>();
+		for (int i = 0; i < activePorts.size(); i++) {
+			if ((destination.equals(activePorts.get(i).getPortNumber()))
+					&& (i == (activePorts.size() - 1))) {
+				sucessors.add(activePorts.get(0).getPortNumber());
+				sucessors.add(activePorts.get(1).getPortNumber());
+				break;
+			} else if ((destination.equals(activePorts.get(i).getPortNumber()))
+					&& (i == (activePorts.size() - 2))) {
+				sucessors.add(activePorts.get(activePorts.size() - 1)
+						.getPortNumber());
+				sucessors.add(activePorts.get(0).getPortNumber());
+				break;
+			} else if (destination.equals(activePorts.get(i).getPortNumber())) {
+				sucessors.add(activePorts.get(i + 1).getPortNumber());
+				sucessors.add(activePorts.get(i + 2).getPortNumber());
+				break;
+			}
+		}
+		return sucessors;
+	}
+
+	/** Client Async task to send the response back to the requester */
 	public void cursorClient(Cursor cursor, String senderPort,
 			String messageType) {
 		Socket socket = null;
@@ -863,42 +856,38 @@ public class SimpleDynamoProvider extends ContentProvider {
 			objectOutputStream.writeObject(message);
 			objectOutputStream.close();
 		} catch (IOException e) {
-			// Log.e(TAG, "IO Exception while creating socket:" +
-			// e.getMessage());
-			e.printStackTrace();
+			Log.e(TAG, "IO Exception while creating socket:" + e.getMessage());
 		}
 	}
 
+	/** Async task to synchronize data from other nodes */
 	private class DataSyncTask extends AsyncTask<String, Void, Void> {
-
 		@Override
 		protected Void doInBackground(String... msgs) {
-			String destinationPorts[] = new String[] { msgs[0], msgs[1] };
 			Socket socket = null;
 			ObjectOutputStream objectOutputStream;
 			Message message = new Message();
 			message.setSenderPort(portStr);
-			message.setSenderPredecessor(msgs[3]);
-			message.setSenderSucessor(msgs[4]);
+			message.setSenderPredecessor(msgs[2]);
+			message.setSenderSucessor(msgs[3]);
 
 			// Setting the type of request
-			message.setMessageType(MessageType.valueOf(msgs[2]));
-
+			message.setMessageType(MessageType.valueOf(msgs[1]));
 			try {
-				for (int i = 0; i < destinationPorts.length; i++) {
-					socket = new Socket(InetAddress.getByAddress(new byte[] {
-							10, 0, 2, 2 }),
-							Integer.parseInt(destinationPorts[i]) * 2);
-					objectOutputStream = new ObjectOutputStream(
-							socket.getOutputStream());
-					objectOutputStream.writeObject(message);
-					objectOutputStream.close();
-				}
+				Log.d(TAG,
+						"@@@@SYNC request sent Request type:"
+								+ message.getMessageType() + "Sending to:"
+								+ msgs[0]);
+				socket = new Socket(InetAddress.getByAddress(new byte[] { 10,
+						0, 2, 2 }), Integer.parseInt(msgs[0]) * 2);
+				objectOutputStream = new ObjectOutputStream(
+						socket.getOutputStream());
+				objectOutputStream.writeObject(message);
+				objectOutputStream.close();
 				socket.close();
 			} catch (IOException e) {
-				// Log.e(TAG,
-				// "IO Exception while creating socket:" + e.getMessage());
-				e.printStackTrace();
+				Log.e(TAG,
+						"IO Exception while creating socket:" + e.getMessage());
 			}
 			return null;
 		}
@@ -922,21 +911,19 @@ public class SimpleDynamoProvider extends ContentProvider {
 		if (cursorMap == null) {
 			return null;
 		}
-		Log.d(TAG, "@@@Cursor map size:" + cursorMap.size());
 		String[] columns = { KEY_FIELD, VALUE_FIELD };
 		MatrixCursor cursor = new MatrixCursor(columns);
 		for (Map.Entry<String, String> entry : cursorMap.entrySet()) {
 			Object[] row = new Object[cursor.getColumnCount()];
-
 			row[cursor.getColumnIndex(KEY_FIELD)] = entry.getKey();
 			row[cursor.getColumnIndex(VALUE_FIELD)] = entry.getValue();
-
 			cursor.addRow(row);
 		}
 		cursor.close();
 		return cursor;
 	}
 
+	/** Method to generate SHA-1 hash */
 	private String genHash(String input) throws NoSuchAlgorithmException {
 		MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
 		byte[] sha1Hash = sha1.digest(input.getBytes());
